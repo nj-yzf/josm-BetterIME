@@ -70,14 +70,14 @@ tasks.jar {
     manifest {
         attributes(
             "Plugin-Class" to "org.openstreetmap.josm.plugins.betterime.BetterIMEPlugin",
-            "Plugin-Description" to "Auto-disable Chinese input method when not editing text fields. " +
-                    "Prevents IME from interfering with JOSM keyboard shortcuts.",
+            "Plugin-Description" to "在非文本输入区域自动禁用中文输入法，防止输入法拦截 JOSM 快捷键。" +
+                    " Auto-disable Chinese IME for non-text components to prevent shortcut conflicts.",
             "Plugin-Mainversion" to josmVersion,
             "Plugin-Version" to "1.0.0",
             "Plugin-Date" to java.time.LocalDate.now().toString(),
             "Plugin-Icon" to "images/BetterIME.svg",
             "Plugin-Canloadatruntime" to "true",
-            "Author" to "IME Toggle Plugin Developer",
+            "Author" to "nj-yzf",
             "Created-By" to "${System.getProperty("java.version")} (${System.getProperty("java.vendor")})"
         )
     }

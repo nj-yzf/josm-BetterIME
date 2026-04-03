@@ -47,7 +47,7 @@ MANIFEST_FILE="$BUILD_DIR/MANIFEST.MF"
 cat > "$MANIFEST_FILE" << 'MANIFEST'
 Manifest-Version: 1.0
 Plugin-Class: org.openstreetmap.josm.plugins.betterime.BetterIMEPlugin
-Plugin-Description: Auto-disable Chinese input method when not editing text fields. Prevents IME from interfering with JOSM keyboard shortcuts.
+Plugin-Description: Auto-disable Chinese IME for non-text components to prevent shortcut conflicts.
 Plugin-Mainversion: 19555
 Plugin-Version: 1.0.0
 Plugin-Date: 2026-04-03
