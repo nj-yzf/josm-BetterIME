@@ -44,18 +44,43 @@ fi
 
 # Create manifest
 MANIFEST_FILE="$BUILD_DIR/MANIFEST.MF"
-cat > "$MANIFEST_FILE" << 'MANIFEST'
-Manifest-Version: 1.0
-Plugin-Class: org.openstreetmap.josm.plugins.betterime.BetterIMEPlugin
-Plugin-Description: Auto-disable Chinese IME for non-text components to prevent shortcut conflicts.
-Plugin-Mainversion: 19555
-Plugin-Version: 1.0.0
-Plugin-Date: 2026-04-03
-Plugin-Icon: images/BetterIME.svg
-Plugin-Canloadatruntime: true
-Author: nj-yzf
+# Create manifest using a Java helper (handles UTF-8 and 72-byte line wrapping)
+MANIFEST_FILE="$BUILD_DIR/MANIFEST.MF"
 
-MANIFEST
+cat > "$BUILD_DIR/ManifestGen.java" << 'JAVAEOF'
+import java.util.jar.Attributes;
+import java.util.jar.Manifest;
+import java.io.FileOutputStream;
+
+public class ManifestGen {
+    public static void main(String[] args) throws Exception {
+        Manifest m = new Manifest();
+        Attributes a = m.getMainAttributes();
+        a.put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        a.putValue("Plugin-Class",
+            "org.openstreetmap.josm.plugins.betterime.BetterIMEPlugin");
+        a.putValue("Plugin-Description",
+            "\u5728\u975e\u6587\u672c\u8f93\u5165\u533a\u57df\u81ea\u52a8"
+          + "\u7981\u7528\u4e2d\u6587\u8f93\u5165\u6cd5\uff0c\u9632\u6b62"
+          + "\u8f93\u5165\u6cd5\u62e6\u622a JOSM \u5feb\u6377\u952e\u3002"
+          + " Auto-disable Chinese IME for non-text components"
+          + " to prevent shortcut conflicts.");
+        a.putValue("Plugin-Mainversion", "19555");
+        a.putValue("Plugin-Version", "1.0.0");
+        a.putValue("Plugin-Date", "2026-04-03");
+        a.putValue("Plugin-Icon", "images/BetterIME.svg");
+        a.putValue("Plugin-Canloadatruntime", "true");
+        a.putValue("Author", "nj-yzf");
+        try (FileOutputStream fos = new FileOutputStream(args[0])) {
+            m.write(fos);
+        }
+    }
+}
+JAVAEOF
+
+"$JAVAC" --release 11 -d "$BUILD_DIR" "$BUILD_DIR/ManifestGen.java"
+"$JAVA_HOME/bin/java" -cp "$BUILD_DIR" ManifestGen "$MANIFEST_FILE"
+rm -f "$BUILD_DIR/ManifestGen.java" "$BUILD_DIR/ManifestGen.class"
 
 # Package JAR
 echo "[3/3] Packaging JAR..."
