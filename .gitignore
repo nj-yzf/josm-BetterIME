@@ -1,0 +1,24 @@
+# Build outputs
+build/
+dist/
+out/
+
+# Gradle
+.gradle/
+gradle/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# JDK (local bundled copy)
+jdk/
+
+# JOSM JAR (downloaded dependency)
+lib/
+
+# OS files
+Thumbs.db
+.DS_Store
