@@ -2,6 +2,7 @@
 package org.openstreetmap.josm.plugins.betterime;
 
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.KeyboardFocusManager;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
@@ -122,7 +123,13 @@ public class BetterIMEPlugin extends Plugin {
 
             try {
                 if (isTextInput) {
-                    enableIME(newFocus);
+                    // Check if in special contexts that need Chinese IME
+                    if (isInTagEditor(newFocus) || isInSearchDialog(newFocus)) {
+                        enableIME(newFocus);
+                    } else {
+                        // Other text fields: unlock but don't switch IME
+                        unlockIME(newFocus);
+                    }
                 } else {
                     disableIME(newFocus);
                 }
@@ -131,6 +138,56 @@ public class BetterIMEPlugin extends Plugin {
                 // Log and continue — never crash JOSM over IME issues.
                 LOG.log(Level.FINE, "[BetterIME] Could not toggle IME", e);
             }
+        }
+
+        /**
+         * Detects if the component is inside a JOSM tag editor.
+         * Traverses the parent hierarchy looking for tag editor components.
+         */
+        private static boolean isInTagEditor(Component comp) {
+            try {
+                Container parent = comp.getParent();
+                for (int i = 0; i < 10 && parent != null; i++) {
+                    String className = parent.getClass().getSimpleName();
+                    if (className.contains("TagEditor") ||
+                        className.contains("TagTable") ||
+                        className.contains("TagPanel") ||
+                        className.contains("TagCellEditor")) {
+                        Logging.debug("[BetterIME] Detected tag editor context: {0}", className);
+                        return true;
+                    }
+                    parent = parent.getParent();
+                }
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] Error detecting tag editor: {0}", e.getMessage());
+            }
+            return false;
+        }
+
+        /**
+         * Detects if the component is inside a search dialog (F3 menu).
+         * Looks for dialog windows with SearchDialog or MenuItemSearchDialog in the class name.
+         */
+        private static boolean isInSearchDialog(Component comp) {
+            try {
+                // Find the top-level window containing this component
+                Component current = comp;
+                while (current != null) {
+                    String className = current.getClass().getSimpleName();
+                    if (className.contains("SearchDialog") ||
+                        className.contains("MenuItemSearchDialog")) {
+                        Logging.debug("[BetterIME] Detected search dialog context: {0}", className);
+                        return true;
+                    }
+                    if (current instanceof java.awt.Window) {
+                        break;
+                    }
+                    current = current.getParent();
+                }
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] Error detecting search dialog: {0}", e.getMessage());
+            }
+            return false;
         }
 
         /**
@@ -167,6 +224,7 @@ public class BetterIMEPlugin extends Plugin {
 
         /**
          * Enable IME (input method) on the given component.
+         * Actively switches to Chinese input method.
          */
         private static void enableIME(Component comp) {
             comp.enableInputMethods(true);
@@ -181,6 +239,15 @@ public class BetterIMEPlugin extends Plugin {
                 // enableInputMethods(true) already did the work.
                 Logging.trace("[BetterIME] setCompositionEnabled not supported, relying on enableInputMethods");
             }
+        }
+
+        /**
+         * Unlock IME (input method) on the given component without switching.
+         * Preserves the user's current IME state while allowing input.
+         */
+        private static void unlockIME(Component comp) {
+            comp.enableInputMethods(true);
+            Logging.debug("[BetterIME] IME unlocked (not switched) for: {0}", comp.getClass().getSimpleName());
         }
 
         /**
