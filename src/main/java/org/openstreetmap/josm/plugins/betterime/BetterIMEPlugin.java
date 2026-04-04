@@ -123,8 +123,8 @@ public class BetterIMEPlugin extends Plugin {
 
             try {
                 if (isTextInput) {
-                    // Check if in special contexts that need Chinese IME
-                    if (isInTagEditor(newFocus) || isInSearchDialog(newFocus)) {
+                    // Check if editing a Chinese name tag
+                    if (isChineseNameTag(newFocus)) {
                         enableIME(newFocus);
                     } else {
                         // Other text fields: unlock but don't switch IME
@@ -138,6 +138,88 @@ public class BetterIMEPlugin extends Plugin {
                 // Log and continue — never crash JOSM over IME issues.
                 LOG.log(Level.FINE, "[BetterIME] Could not toggle IME", e);
             }
+        }
+
+        /**
+         * Detects if the component is editing one of the Chinese name tags.
+         * Checks for: "name", "name:zh", "name:zh-Hans", "name:zh-Hant"
+         */
+        private static boolean isChineseNameTag(Component comp) {
+            try {
+                // Must be in tag editor first
+                if (!isInTagEditor(comp)) {
+                    return false;
+                }
+
+                // Try to extract the tag key from the component hierarchy
+                String tagKey = extractTagKey(comp);
+                if (tagKey != null) {
+                    boolean isChineseTag = tagKey.equals("name") ||
+                                          tagKey.equals("name:zh") ||
+                                          tagKey.equals("name:zh-Hans") ||
+                                          tagKey.equals("name:zh-Hant");
+                    if (isChineseTag) {
+                        Logging.debug("[BetterIME] Detected Chinese name tag: {0}", tagKey);
+                    }
+                    return isChineseTag;
+                }
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] Error detecting Chinese name tag: {0}", e.getMessage());
+            }
+            return false;
+        }
+
+        /**
+         * Extracts the tag key from a component in the tag editor.
+         * Looks for component names or properties that identify the tag.
+         */
+        private static String extractTagKey(Component comp) {
+            try {
+                // Try component name first (format: "tag_<key>" or similar)
+                String name = comp.getName();
+                if (name != null && !name.isEmpty()) {
+                    if (name.startsWith("tag_")) {
+                        return name.substring(4);
+                    }
+                    // Sometimes the name is just the tag key
+                    if (name.startsWith("name")) {
+                        return name;
+                    }
+                }
+
+                // Try to find tag key in parent components or their properties
+                Container parent = comp.getParent();
+                for (int i = 0; i < 5 && parent != null; i++) {
+                    // Check if parent has a name that indicates the tag
+                    String parentName = parent.getName();
+                    if (parentName != null && !parentName.isEmpty()) {
+                        if (parentName.startsWith("tag_")) {
+                            return parentName.substring(4);
+                        }
+                        if (parentName.startsWith("name")) {
+                            return parentName;
+                        }
+                    }
+
+                    // Check for client properties (JOSM may store tag info here)
+                    if (parent instanceof JComponent) {
+                        JComponent jcomp = (JComponent) parent;
+                        Object tagKeyProp = jcomp.getClientProperty("tagKey");
+                        if (tagKeyProp != null) {
+                            return tagKeyProp.toString();
+                        }
+                        Object tagProp = jcomp.getClientProperty("tag");
+                        if (tagProp != null) {
+                            return tagProp.toString();
+                        }
+                    }
+
+                    parent = parent.getParent();
+                }
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] Error extracting tag key: {0}", e.getMessage());
+            }
+            return null;
         }
 
         /**
