@@ -449,12 +449,24 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         /**
-         * Unlock IME: allow input methods but don't actively switch.
-         * Preserves the user's current IME state.
+         * Unlock IME: allow input methods but default to English.
+         * Enables input method support so user can manually switch,
+         * but actively disables composition (switches to English mode).
          */
         private static void unlockIME(Component comp) {
             comp.enableInputMethods(true);
-            Logging.debug("[BetterIME] IME unlocked (not switched) for: {0}", comp.getClass().getSimpleName());
+            try {
+                InputContext ic = comp.getInputContext();
+                if (ic != null) {
+                    ic.endComposition();
+                    if (ic.isCompositionEnabled()) {
+                        ic.setCompositionEnabled(false);
+                    }
+                }
+            } catch (UnsupportedOperationException e) {
+                Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
+            }
+            Logging.debug("[BetterIME] IME unlocked (default English) for: {0}", comp.getClass().getSimpleName());
         }
 
         /**
