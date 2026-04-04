@@ -4,12 +4,15 @@ package org.openstreetmap.josm.plugins.betterime;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.KeyboardFocusManager;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.im.InputContext;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -18,6 +21,7 @@ import javax.swing.JComponent;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JSpinner;
+import javax.swing.JTable;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
@@ -32,15 +36,16 @@ import org.openstreetmap.josm.tools.Logging;
  *
  * Automatically disables Chinese input method (IME) when focus is on
  * non-text components (like the map view), so that keyboard shortcuts
- * work correctly even when an IME is active. When the user clicks
- * into a text field or text area, the IME is re-enabled for normal
- * text input.
+ * work correctly even when an IME is active.
+ *
+ * IME behavior by context:
+ * - Non-text components (map view, etc.): IME disabled (shortcuts work)
+ * - Tag editor editing "name"/"name:zh"/"name:zh-Hans"/"name:zh-Hant": IME enabled (Chinese)
+ * - F3 "Search presets" dialog: IME enabled (Chinese)
+ * - All other text fields: IME unlocked but not switched (user controls)
  *
  * Also disables the default Ctrl+Space shortcut ("Search menu items")
  * which conflicts with Chinese input method toggling on most systems.
- *
- * This solves a common pain point for Chinese users where the IME
- * intercepts shortcut keys like 'S', 'A', 'D', etc.
  */
 public class BetterIMEPlugin extends Plugin {
 
@@ -81,7 +86,6 @@ public class BetterIMEPlugin extends Plugin {
             JFrame frame = MainApplication.getMainFrame();
             if (frame == null) {
                 Logging.warn("[BetterIME] Main frame not ready, retrying Ctrl+Space removal...");
-                // Retry after a short delay — main frame may still be initializing
                 SwingUtilities.invokeLater(this::disableCtrlSpaceShortcut);
                 return;
             }
@@ -89,9 +93,6 @@ public class BetterIMEPlugin extends Plugin {
             JComponent contentPane = (JComponent) frame.getContentPane();
             KeyStroke ctrlSpace = KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, InputEvent.CTRL_DOWN_MASK);
 
-            // Replace the Ctrl+Space binding with a do-nothing action.
-            // We use a named no-op action rather than "none" because "none"
-            // only works for WHEN_FOCUSED scope, not WHEN_IN_FOCUSED_WINDOW.
             String actionKey = "betterIME.consumeCtrlSpace";
             contentPane.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(ctrlSpace, actionKey);
             contentPane.getActionMap().put(actionKey, new AbstractAction() {
@@ -109,8 +110,19 @@ public class BetterIMEPlugin extends Plugin {
 
     /**
      * Listens for focus changes and toggles IME accordingly.
+     *
+     * Logic:
+     *   1. Non-text component → disableIME (shortcuts work)
+     *   2. Text in tag editor editing name/name:zh/name:zh-Hans/name:zh-Hant → enableIME
+     *   3. Text in F3 TaggingPresetSearchDialog → enableIME
+     *   4. All other text fields → unlockIME (user controls IME state)
      */
     private static class FocusChangeListener implements PropertyChangeListener {
+
+        /** Tag keys that should trigger Chinese IME activation */
+        private static final String[] CHINESE_TAG_KEYS = {
+            "name", "name:zh", "name:zh-Hans", "name:zh-Hant"
+        };
 
         @Override
         public void propertyChange(PropertyChangeEvent evt) {
@@ -122,177 +134,290 @@ public class BetterIMEPlugin extends Plugin {
             boolean isTextInput = isTextInputComponent(newFocus);
 
             try {
-                if (isTextInput) {
-                    // Check if editing a Chinese name tag
-                    if (isChineseNameTag(newFocus)) {
-                        enableIME(newFocus);
-                    } else {
-                        // Other text fields: unlock but don't switch IME
-                        unlockIME(newFocus);
-                    }
-                } else {
+                if (!isTextInput) {
                     disableIME(newFocus);
+                } else if (shouldEnableChineseIME(newFocus)) {
+                    enableIME(newFocus);
+                } else {
+                    unlockIME(newFocus);
                 }
             } catch (Exception e) {
-                // Some platforms/JVMs may not support IME control fully.
-                // Log and continue — never crash JOSM over IME issues.
                 LOG.log(Level.FINE, "[BetterIME] Could not toggle IME", e);
             }
         }
 
         /**
-         * Detects if the component is editing one of the Chinese name tags.
-         * Checks for: "name", "name:zh", "name:zh-Hans", "name:zh-Hant"
+         * Determines if this text component should actively enable Chinese IME.
+         * Returns true for:
+         *   - Tag editor editing name/name:zh/name:zh-Hans/name:zh-Hant
+         *   - F3 TaggingPresetSearchDialog
          */
-        private static boolean isChineseNameTag(Component comp) {
-            try {
-                // Must be in tag editor first
-                if (!isInTagEditor(comp)) {
-                    return false;
-                }
+        private static boolean shouldEnableChineseIME(Component comp) {
+            // Check F3 preset search dialog first (cheapest check)
+            if (isInPresetSearchDialog(comp)) {
+                return true;
+            }
 
-                // Try to extract the tag key from the component hierarchy
-                String tagKey = extractTagKey(comp);
-                if (tagKey != null) {
-                    boolean isChineseTag = tagKey.equals("name") ||
-                                          tagKey.equals("name:zh") ||
-                                          tagKey.equals("name:zh-Hans") ||
-                                          tagKey.equals("name:zh-Hant");
-                    if (isChineseTag) {
-                        Logging.debug("[BetterIME] Detected Chinese name tag: {0}", tagKey);
+            // Check if editing a Chinese name tag
+            String tagKey = detectTagKey(comp);
+            if (tagKey != null) {
+                for (String key : CHINESE_TAG_KEYS) {
+                    if (key.equals(tagKey)) {
+                        Logging.debug("[BetterIME] Chinese name tag detected: {0}", tagKey);
+                        return true;
                     }
-                    return isChineseTag;
+                }
+                Logging.debug("[BetterIME] Non-Chinese tag: {0}, using unlock mode", tagKey);
+            }
+
+            return false;
+        }
+
+        // ======================================================================
+        // Context detection: F3 Preset Search Dialog
+        // ======================================================================
+
+        /**
+         * Detects if the component is inside the F3 "Search presets" dialog.
+         * Class: TaggingPresetSearchDialog (NOT SearchDialog which is Ctrl+F)
+         */
+        private static boolean isInPresetSearchDialog(Component comp) {
+            try {
+                Window window = SwingUtilities.getWindowAncestor(comp);
+                if (window != null) {
+                    String className = window.getClass().getSimpleName();
+                    if (className.equals("TaggingPresetSearchDialog")) {
+                        Logging.debug("[BetterIME] In F3 preset search dialog");
+                        return true;
+                    }
                 }
             } catch (Exception e) {
-                Logging.trace("[BetterIME] Error detecting Chinese name tag: {0}", e.getMessage());
+                Logging.trace("[BetterIME] Error checking preset search dialog: {0}", e.getMessage());
             }
             return false;
         }
 
+        // ======================================================================
+        // Context detection: Tag key extraction
+        // ======================================================================
+
         /**
-         * Extracts the tag key from a component in the tag editor.
-         * Looks for component names or properties that identify the tag.
+         * Attempts to detect the tag key being edited.
+         * Handles three JOSM contexts:
+         *   A) EditTagDialog popup (Properties panel double-click)
+         *   B) TagTable inline editing (Relation editor)
+         *   C) Preset dialog fields (after F3 preset selection)
+         *
+         * @return the tag key string, or null if not in a tag editing context
          */
-        private static String extractTagKey(Component comp) {
+        private static String detectTagKey(Component comp) {
+            String key;
+
+            // Context A: EditTagDialog / AbstractTagsDialog popup
+            key = detectTagKeyFromEditDialog(comp);
+            if (key != null) return key;
+
+            // Context B: TagTable inline editing
+            key = detectTagKeyFromTagTable(comp);
+            if (key != null) return key;
+
+            // Context C: Preset dialog fields
+            key = detectTagKeyFromPresetDialog(comp);
+            if (key != null) return key;
+
+            return null;
+        }
+
+        /**
+         * Context A: Detect tag key from EditTagDialog / AbstractTagsDialog.
+         *
+         * When user double-clicks a tag in the Properties panel, JOSM opens
+         * an EditTagDialog (extends AbstractTagsDialog extends ExtendedDialog).
+         * The dialog stores the tag key in a field named "key" (type String,
+         * or "keys" (type String[]) in some versions).
+         *
+         * We walk up to the dialog window and read this field via reflection.
+         */
+        private static String detectTagKeyFromEditDialog(Component comp) {
             try {
-                // Try component name first (format: "tag_<key>" or similar)
-                String name = comp.getName();
-                if (name != null && !name.isEmpty()) {
-                    if (name.startsWith("tag_")) {
-                        return name.substring(4);
+                Window window = SwingUtilities.getWindowAncestor(comp);
+                if (window == null) return null;
+
+                // Check class hierarchy for EditTagDialog or AbstractTagsDialog
+                Class<?> clazz = window.getClass();
+                while (clazz != null) {
+                    String name = clazz.getSimpleName();
+                    if (name.contains("EditTagDialog") || name.contains("AbstractTagsDialog") ||
+                        name.contains("TagEditHelper")) {
+                        // Try to read "key" field (single key being edited)
+                        String tagKey = getFieldAsString(window, clazz, "key");
+                        if (tagKey != null) {
+                            Logging.debug("[BetterIME] EditTagDialog tag key: {0}", tagKey);
+                            return tagKey;
+                        }
+                        break;
                     }
-                    // Sometimes the name is just the tag key
-                    if (name.startsWith("name")) {
-                        return name;
-                    }
+                    clazz = clazz.getSuperclass();
                 }
 
-                // Try to find tag key in parent components or their properties
-                Container parent = comp.getParent();
-                for (int i = 0; i < 5 && parent != null; i++) {
-                    // Check if parent has a name that indicates the tag
-                    String parentName = parent.getName();
-                    if (parentName != null && !parentName.isEmpty()) {
-                        if (parentName.startsWith("tag_")) {
-                            return parentName.substring(4);
+                // Also check enclosing class names (EditTagDialog is inner class of TagEditHelper)
+                String windowClassName = window.getClass().getName();
+                if (windowClassName.contains("TagEditHelper") || windowClassName.contains("EditTagDialog")) {
+                    // Search all superclasses for "key" field
+                    Class<?> c = window.getClass();
+                    while (c != null && c != Object.class) {
+                        String tagKey = getFieldAsString(window, c, "key");
+                        if (tagKey != null) {
+                            Logging.debug("[BetterIME] TagEditHelper dialog tag key: {0}", tagKey);
+                            return tagKey;
                         }
-                        if (parentName.startsWith("name")) {
-                            return parentName;
-                        }
+                        c = c.getSuperclass();
                     }
-
-                    // Check for client properties (JOSM may store tag info here)
-                    if (parent instanceof JComponent) {
-                        JComponent jcomp = (JComponent) parent;
-                        Object tagKeyProp = jcomp.getClientProperty("tagKey");
-                        if (tagKeyProp != null) {
-                            return tagKeyProp.toString();
-                        }
-                        Object tagProp = jcomp.getClientProperty("tag");
-                        if (tagProp != null) {
-                            return tagProp.toString();
-                        }
-                    }
-
-                    parent = parent.getParent();
                 }
             } catch (Exception e) {
-                Logging.trace("[BetterIME] Error extracting tag key: {0}", e.getMessage());
+                Logging.trace("[BetterIME] Error detecting tag key from EditDialog: {0}", e.getMessage());
             }
             return null;
         }
 
         /**
-         * Detects if the component is inside a JOSM tag editor.
-         * Traverses the parent hierarchy looking for tag editor components.
+         * Context B: Detect tag key from TagTable inline editing.
+         *
+         * In the Relation editor, tags are edited inline in a TagTable (JTable).
+         * We find the JTable ancestor, get the editing row, then extract the
+         * TagModel from the table model and call getName().
          */
-        private static boolean isInTagEditor(Component comp) {
+        private static String detectTagKeyFromTagTable(Component comp) {
             try {
+                // Walk up to find a JTable
                 Container parent = comp.getParent();
-                for (int i = 0; i < 10 && parent != null; i++) {
-                    String className = parent.getClass().getSimpleName();
-                    if (className.contains("TagEditor") ||
-                        className.contains("TagTable") ||
-                        className.contains("TagPanel") ||
-                        className.contains("TagCellEditor")) {
-                        Logging.debug("[BetterIME] Detected tag editor context: {0}", className);
-                        return true;
+                while (parent != null) {
+                    if (parent instanceof JTable) {
+                        JTable table = (JTable) parent;
+                        String tableClassName = table.getClass().getSimpleName();
+
+                        // Only proceed if this looks like a TagTable
+                        if (!tableClassName.contains("TagTable") &&
+                            !table.getClass().getName().contains("tagging")) {
+                            parent = parent.getParent();
+                            continue;
+                        }
+
+                        int editingRow = table.getEditingRow();
+                        if (editingRow < 0) break;
+
+                        // Get the value at editing row, column 0 (key column)
+                        // In TagEditorModel, getValueAt returns a TagModel object
+                        Object value = table.getModel().getValueAt(editingRow, 0);
+                        if (value == null) break;
+
+                        // If value is a String, it's the key directly
+                        if (value instanceof String) {
+                            Logging.debug("[BetterIME] TagTable key (String): {0}", value);
+                            return (String) value;
+                        }
+
+                        // If value is a TagModel, call getName() via reflection
+                        try {
+                            Method getName = value.getClass().getMethod("getName");
+                            Object result = getName.invoke(value);
+                            if (result instanceof String) {
+                                Logging.debug("[BetterIME] TagTable key (TagModel): {0}", result);
+                                return (String) result;
+                            }
+                        } catch (NoSuchMethodException e) {
+                            // Not a TagModel, try toString()
+                            String str = value.toString();
+                            if (!str.isEmpty()) {
+                                Logging.debug("[BetterIME] TagTable key (toString): {0}", str);
+                                return str;
+                            }
+                        }
+                        break;
                     }
                     parent = parent.getParent();
                 }
             } catch (Exception e) {
-                Logging.trace("[BetterIME] Error detecting tag editor: {0}", e.getMessage());
+                Logging.trace("[BetterIME] Error detecting tag key from TagTable: {0}", e.getMessage());
             }
-            return false;
+            return null;
         }
 
         /**
-         * Detects if the component is inside a search dialog (F3 menu).
-         * Looks for dialog windows with SearchDialog or MenuItemSearchDialog in the class name.
+         * Context C: Detect tag key from Preset dialog fields.
+         *
+         * When a preset is applied, text fields may have a "hint" set via
+         * JosmTextField.setHint() that stores the tag key.
          */
-        private static boolean isInSearchDialog(Component comp) {
+        private static String detectTagKeyFromPresetDialog(Component comp) {
             try {
-                // Find the top-level window containing this component
-                Component current = comp;
-                while (current != null) {
-                    String className = current.getClass().getSimpleName();
-                    if (className.contains("SearchDialog") ||
-                        className.contains("MenuItemSearchDialog")) {
-                        Logging.debug("[BetterIME] Detected search dialog context: {0}", className);
-                        return true;
+                // Check if the window is a preset-related dialog
+                Window window = SwingUtilities.getWindowAncestor(comp);
+                if (window == null) return null;
+
+                String windowClass = window.getClass().getName();
+                if (!windowClass.contains("Preset") && !windowClass.contains("tagging")) {
+                    return null;
+                }
+
+                // Try to call getHint() on the component (JosmTextField stores tag key as hint)
+                try {
+                    Method getHint = comp.getClass().getMethod("getHint");
+                    Object hint = getHint.invoke(comp);
+                    if (hint instanceof String && !((String) hint).isEmpty()) {
+                        Logging.debug("[BetterIME] Preset dialog hint key: {0}", hint);
+                        return (String) hint;
                     }
-                    if (current instanceof java.awt.Window) {
-                        break;
-                    }
-                    current = current.getParent();
+                } catch (NoSuchMethodException e) {
+                    // Not a JosmTextField, no hint available
                 }
             } catch (Exception e) {
-                Logging.trace("[BetterIME] Error detecting search dialog: {0}", e.getMessage());
+                Logging.trace("[BetterIME] Error detecting tag key from preset dialog: {0}", e.getMessage());
             }
-            return false;
+            return null;
         }
+
+        // ======================================================================
+        // Utility methods
+        // ======================================================================
+
+        /**
+         * Reads a String field from an object via reflection.
+         */
+        private static String getFieldAsString(Object obj, Class<?> clazz, String fieldName) {
+            try {
+                Field field = clazz.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                Object value = field.get(obj);
+                if (value instanceof String) {
+                    return (String) value;
+                }
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                // Field not found in this class, will try superclass
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] Error reading field {0}: {1}", fieldName, e.getMessage());
+            }
+            return null;
+        }
+
+        // ======================================================================
+        // Component type detection
+        // ======================================================================
 
         /**
          * Determines whether a component is a text input that needs IME.
          */
         private static boolean isTextInputComponent(Component comp) {
-            // Standard Swing text components (JTextField, JTextArea, JEditorPane, etc.)
             if (comp instanceof JTextComponent) {
                 return true;
             }
-
-            // Editable combo boxes have an embedded text editor
             if (comp instanceof JComboBox) {
                 return ((JComboBox<?>) comp).isEditable();
             }
-
-            // JSpinner text editor
             if (comp instanceof JSpinner) {
                 return true;
             }
-
             // Some combo boxes put focus on an inner editor component.
-            // Walk up the parent hierarchy a few levels to check.
             Component parent = comp.getParent();
             for (int i = 0; i < 3 && parent != null; i++) {
                 if (parent instanceof JComboBox && ((JComboBox<?>) parent).isEditable()) {
@@ -300,13 +425,15 @@ public class BetterIMEPlugin extends Plugin {
                 }
                 parent = parent.getParent();
             }
-
             return false;
         }
 
+        // ======================================================================
+        // IME control methods
+        // ======================================================================
+
         /**
-         * Enable IME (input method) on the given component.
-         * Actively switches to Chinese input method.
+         * Enable IME: actively switch to Chinese input method.
          */
         private static void enableIME(Component comp) {
             comp.enableInputMethods(true);
@@ -317,15 +444,13 @@ public class BetterIMEPlugin extends Plugin {
                     Logging.debug("[BetterIME] IME enabled for: {0}", comp.getClass().getSimpleName());
                 }
             } catch (UnsupportedOperationException e) {
-                // Some input methods don't support querying composition state.
-                // enableInputMethods(true) already did the work.
                 Logging.trace("[BetterIME] setCompositionEnabled not supported, relying on enableInputMethods");
             }
         }
 
         /**
-         * Unlock IME (input method) on the given component without switching.
-         * Preserves the user's current IME state while allowing input.
+         * Unlock IME: allow input methods but don't actively switch.
+         * Preserves the user's current IME state.
          */
         private static void unlockIME(Component comp) {
             comp.enableInputMethods(true);
@@ -333,10 +458,9 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         /**
-         * Disable IME (input method) on the given component.
+         * Disable IME: prevent input methods from intercepting keystrokes.
          */
         private static void disableIME(Component comp) {
-            // First, end any ongoing composition to avoid losing partial input
             try {
                 InputContext ic = comp.getInputContext();
                 if (ic != null) {
@@ -347,8 +471,6 @@ public class BetterIMEPlugin extends Plugin {
                     }
                 }
             } catch (UnsupportedOperationException e) {
-                // Fallback: some platforms don't support setCompositionEnabled.
-                // enableInputMethods(false) below handles it at a lower level.
                 Logging.trace("[BetterIME] setCompositionEnabled not supported, using enableInputMethods(false)");
             }
             comp.enableInputMethods(false);
