@@ -66,8 +66,8 @@ public class ManifestGen {
           + " Auto-disable Chinese IME for non-text components"
           + " to prevent shortcut conflicts.");
         a.putValue("Plugin-Mainversion", "19555");
-        a.putValue("Plugin-Version", "1.0.0");
-        a.putValue("Plugin-Date", "2026-04-03");
+        a.putValue("Plugin-Version", "1.1.0");
+        a.putValue("Plugin-Date", "2026-04-04");
         a.putValue("Plugin-Icon", "images/BetterIME.svg");
         a.putValue("Plugin-Canloadatruntime", "true");
         a.putValue("Author", "nj-yzf");
