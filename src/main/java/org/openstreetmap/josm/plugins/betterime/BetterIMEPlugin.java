@@ -13,6 +13,7 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -449,13 +450,13 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         /**
-         * Unlock IME: allow input methods but default to English.
+         * Unlock IME: allow input methods but force English mode.
          * Enables input method support so user can manually switch,
-         * but actively disables composition (switches to English mode).
+         * but actively selects English locale to override any residual
+         * Chinese IME state from previous focus.
          *
-         * Uses invokeLater to ensure setCompositionEnabled(false) takes
-         * effect AFTER the input method is fully re-activated by
-         * enableInputMethods(true), which restores previous IME state.
+         * Uses invokeLater to ensure the locale switch takes effect
+         * AFTER the input method is fully re-activated.
          */
         private static void unlockIME(Component comp) {
             comp.enableInputMethods(true);
@@ -464,36 +465,44 @@ public class BetterIMEPlugin extends Plugin {
                     InputContext ic = comp.getInputContext();
                     if (ic != null) {
                         ic.endComposition();
-                        if (ic.isCompositionEnabled()) {
+                        // selectInputMethod(ENGLISH) forces the IME to English mode,
+                        // unlike setCompositionEnabled(false) which only closes the
+                        // composition window but leaves the IME in Chinese mode.
+                        ic.selectInputMethod(Locale.ENGLISH);
+                    }
+                } catch (Exception e) {
+                    // Fallback: try setCompositionEnabled
+                    try {
+                        InputContext ic = comp.getInputContext();
+                        if (ic != null && ic.isCompositionEnabled()) {
                             ic.setCompositionEnabled(false);
                         }
+                    } catch (Exception ignored) {
+                        // Give up gracefully
                     }
-                } catch (UnsupportedOperationException e) {
-                    Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
-                } catch (Exception e) {
-                    Logging.trace("[BetterIME] Error in unlockIME invokeLater: {0}", e.getMessage());
+                    Logging.trace("[BetterIME] selectInputMethod fallback in unlockIME: {0}", e.getMessage());
                 }
             });
-            Logging.debug("[BetterIME] IME unlocked (default English) for: {0}", comp.getClass().getSimpleName());
+            Logging.debug("[BetterIME] IME unlocked (English) for: {0}", comp.getClass().getSimpleName());
         }
 
         /**
          * Disable IME: prevent input methods from intercepting keystrokes.
+         * Also forces English locale so next enableInputMethods(true) won't
+         * restore Chinese mode.
          */
         private static void disableIME(Component comp) {
             try {
                 InputContext ic = comp.getInputContext();
                 if (ic != null) {
                     ic.endComposition();
-                    if (ic.isCompositionEnabled()) {
-                        ic.setCompositionEnabled(false);
-                        Logging.debug("[BetterIME] IME disabled for: {0}", comp.getClass().getSimpleName());
-                    }
+                    ic.selectInputMethod(Locale.ENGLISH);
                 }
-            } catch (UnsupportedOperationException e) {
-                Logging.trace("[BetterIME] setCompositionEnabled not supported, using enableInputMethods(false)");
+            } catch (Exception e) {
+                Logging.trace("[BetterIME] selectInputMethod failed in disableIME: {0}", e.getMessage());
             }
             comp.enableInputMethods(false);
+            Logging.debug("[BetterIME] IME disabled for: {0}", comp.getClass().getSimpleName());
         }
     }
 }
