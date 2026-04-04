@@ -15,6 +15,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,7 +32,10 @@ import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.text.JTextComponent;
 
+import org.openstreetmap.josm.data.preferences.BooleanProperty;
+import org.openstreetmap.josm.data.preferences.ListProperty;
 import org.openstreetmap.josm.gui.MainApplication;
+import org.openstreetmap.josm.gui.preferences.PreferenceSetting;
 import org.openstreetmap.josm.plugins.Plugin;
 import org.openstreetmap.josm.plugins.PluginInformation;
 import org.openstreetmap.josm.tools.Logging;
@@ -50,12 +54,43 @@ public class BetterIMEPlugin extends Plugin {
 
     private static final Logger LOG = Logger.getLogger(BetterIMEPlugin.class.getName());
 
+    // ======================================================================
+    // User-configurable preferences (visible in F12 and Advanced Preferences)
+    // ======================================================================
+
+    /** Master switch: enable/disable automatic IME toggling. */
+    static final BooleanProperty PROP_AUTO_TOGGLE =
+            new BooleanProperty("betterime.auto_toggle", true);
+
+    /** Whether to enable Chinese IME in F3 preset search dialog. */
+    static final BooleanProperty PROP_PRESET_SEARCH =
+            new BooleanProperty("betterime.preset_search", true);
+
+    /** Whether to enable Chinese IME based on tag key detection. */
+    static final BooleanProperty PROP_TAG_DETECTION =
+            new BooleanProperty("betterime.tag_detection", true);
+
+    /** Default tag keys list. */
+    static final List<String> DEFAULT_TAG_KEYS = Arrays.asList(
+            "name", "name:zh", "name:zh-Hans", "name:zh-Hant",
+            "alt_name", "operator"
+    );
+
+    /** Tag keys that trigger Chinese IME activation. */
+    static final ListProperty PROP_CHINESE_TAG_KEYS =
+            new ListProperty("betterime.chinese_tag_keys", DEFAULT_TAG_KEYS);
+
     public BetterIMEPlugin(PluginInformation info) {
         super(info);
         KeyboardFocusManager.getCurrentKeyboardFocusManager()
                 .addPropertyChangeListener("permanentFocusOwner", new FocusChangeListener());
         SwingUtilities.invokeLater(this::disableCtrlSpaceShortcut);
         Logging.info("[BetterIME] Plugin loaded.");
+    }
+
+    @Override
+    public PreferenceSetting getPreferenceSetting() {
+        return new BetterIMEPreference();
     }
 
     private void disableCtrlSpaceShortcut() {
@@ -99,12 +134,6 @@ public class BetterIMEPlugin extends Plugin {
 
     private static class FocusChangeListener implements PropertyChangeListener {
 
-        /** Tag keys that trigger Chinese IME. */
-        private static final Set<String> CHINESE_TAG_KEYS = new HashSet<>(Arrays.asList(
-            "name", "name:zh", "name:zh-Hans", "name:zh-Hant",
-            "alt_name", "operator"
-        ));
-
         /** Reflection field cache: (Class, fieldName) → Field. */
         private static final Map<String, Field> FIELD_CACHE = new ConcurrentHashMap<>();
 
@@ -113,6 +142,9 @@ public class BetterIMEPlugin extends Plugin {
 
         @Override
         public void propertyChange(PropertyChangeEvent evt) {
+            // Master switch off → do nothing
+            if (!PROP_AUTO_TOGGLE.get()) return;
+
             // Clean up: switch old component back to English when leaving Chinese context
             if (wasChinese) {
                 Component old = (Component) evt.getOldValue();
@@ -146,17 +178,22 @@ public class BetterIMEPlugin extends Plugin {
         // --- Detector: F3 TaggingPresetSearchDialog ---
 
         static boolean isInPresetSearchDialog(Component comp) {
+            if (!PROP_PRESET_SEARCH.get()) return false;
             Window w = SwingUtilities.getWindowAncestor(comp);
             return w != null && "TaggingPresetSearchDialog".equals(w.getClass().getSimpleName());
         }
 
-        // --- Detector: editing name/name:zh/name:zh-Hans/name:zh-Hant tag ---
+        // --- Detector: editing Chinese name tags (configurable list) ---
 
         static boolean isEditingChineseNameTag(Component comp) {
+            if (!PROP_TAG_DETECTION.get()) return false;
             String key = detectTagKey(comp);
-            if (key != null && CHINESE_TAG_KEYS.contains(key)) {
-                Logging.debug("[BetterIME] Chinese tag: {0}", key);
-                return true;
+            if (key != null) {
+                Set<String> tagKeys = new HashSet<>(PROP_CHINESE_TAG_KEYS.get());
+                if (tagKeys.contains(key)) {
+                    Logging.debug("[BetterIME] Chinese tag: {0}", key);
+                    return true;
+                }
             }
             return false;
         }
@@ -294,9 +331,17 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         /**
-         * Sets IME composition state. We NEVER call enableInputMethods(true/false)
-         * because toggling it causes ImmAssociateContext detach/reattach which
-         * restores the previous Chinese IME state asynchronously (race condition).
+         * Sets IME composition state.
+         *
+         * For text components, we only use setCompositionEnabled(true/false)
+         * and NEVER call enableInputMethods(false), because re-enabling it
+         * later causes ImmAssociateContext detach/reattach which restores
+         * the previous Chinese IME state asynchronously (race condition).
+         *
+         * For non-text components, we additionally call enableInputMethods(false)
+         * to fully detach the IME context, preventing the user from manually
+         * switching to Chinese via Shift or Ctrl+Space. This is safe because
+         * we never call enableInputMethods(true) on non-text components.
          */
         private static void setComposition(Component comp, boolean enabled) {
             try {
@@ -307,6 +352,9 @@ public class BetterIMEPlugin extends Plugin {
                 }
             } catch (UnsupportedOperationException e) {
                 Logging.trace("[BetterIME] setCompositionEnabled not supported");
+            }
+            if (!enabled && !isTextInput(comp)) {
+                comp.enableInputMethods(false);
             }
         }
     }
