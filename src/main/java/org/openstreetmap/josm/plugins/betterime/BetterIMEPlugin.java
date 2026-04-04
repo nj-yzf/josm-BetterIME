@@ -452,20 +452,28 @@ public class BetterIMEPlugin extends Plugin {
          * Unlock IME: allow input methods but default to English.
          * Enables input method support so user can manually switch,
          * but actively disables composition (switches to English mode).
+         *
+         * Uses invokeLater to ensure setCompositionEnabled(false) takes
+         * effect AFTER the input method is fully re-activated by
+         * enableInputMethods(true), which restores previous IME state.
          */
         private static void unlockIME(Component comp) {
             comp.enableInputMethods(true);
-            try {
-                InputContext ic = comp.getInputContext();
-                if (ic != null) {
-                    ic.endComposition();
-                    if (ic.isCompositionEnabled()) {
-                        ic.setCompositionEnabled(false);
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    InputContext ic = comp.getInputContext();
+                    if (ic != null) {
+                        ic.endComposition();
+                        if (ic.isCompositionEnabled()) {
+                            ic.setCompositionEnabled(false);
+                        }
                     }
+                } catch (UnsupportedOperationException e) {
+                    Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
+                } catch (Exception e) {
+                    Logging.trace("[BetterIME] Error in unlockIME invokeLater: {0}", e.getMessage());
                 }
-            } catch (UnsupportedOperationException e) {
-                Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
-            }
+            });
             Logging.debug("[BetterIME] IME unlocked (default English) for: {0}", comp.getClass().getSimpleName());
         }
 
