@@ -24,6 +24,7 @@ import javax.swing.JSpinner;
 import javax.swing.JTable;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.text.JTextComponent;
 
 import org.openstreetmap.josm.gui.MainApplication;
@@ -469,30 +470,29 @@ public class BetterIMEPlugin extends Plugin {
          * Enables input method support so user can manually switch,
          * but disables composition to ensure English mode.
          *
-         * Uses a two-stage invokeLater to ensure setCompositionEnabled(false)
-         * takes effect AFTER enableInputMethods(true) has fully re-activated
-         * the input method subsystem.
+         * Uses a Timer with a short delay to ensure setCompositionEnabled(false)
+         * takes effect AFTER the OS has fully processed the IME re-activation
+         * triggered by enableInputMethods(true). invokeLater alone is not
+         * sufficient because the OS IME activation happens asynchronously
+         * outside the Java EDT.
          */
         private static void unlockIME(Component comp) {
             comp.enableInputMethods(true);
-            // Stage 1: schedule after current event processing
-            SwingUtilities.invokeLater(() -> {
-                // Stage 2: schedule again to ensure we run after all pending
-                // input method activation events have been processed
-                SwingUtilities.invokeLater(() -> {
-                    try {
-                        InputContext ic = comp.getInputContext();
-                        if (ic != null) {
-                            ic.endComposition();
-                            ic.setCompositionEnabled(false);
-                        }
-                    } catch (UnsupportedOperationException e) {
-                        Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
-                    } catch (Exception e) {
-                        Logging.trace("[BetterIME] Error in unlockIME: {0}", e.getMessage());
+            Timer timer = new Timer(50, e -> {
+                try {
+                    InputContext ic = comp.getInputContext();
+                    if (ic != null) {
+                        ic.endComposition();
+                        ic.setCompositionEnabled(false);
                     }
-                });
+                } catch (UnsupportedOperationException ex) {
+                    Logging.trace("[BetterIME] setCompositionEnabled not supported in unlockIME");
+                } catch (Exception ex) {
+                    Logging.trace("[BetterIME] Error in unlockIME timer: {0}", ex.getMessage());
+                }
             });
+            timer.setRepeats(false);
+            timer.start();
         }
 
         /**
