@@ -70,6 +70,7 @@ public class ManifestGen {
         a.putValue("Plugin-Date", "2026-04-04");
         a.putValue("Plugin-Icon", "images/BetterIME.svg");
         a.putValue("Plugin-Canloadatruntime", "true");
+        a.putValue("Plugin-Link", "https://github.com/nj-yzf/josm-BetterIME");
         a.putValue("Author", "nj-yzf");
         try (FileOutputStream fos = new FileOutputStream(args[0])) {
             m.write(fos);

@@ -77,6 +77,7 @@ tasks.jar {
             "Plugin-Date" to java.time.LocalDate.now().toString(),
             "Plugin-Icon" to "images/BetterIME.svg",
             "Plugin-Canloadatruntime" to "true",
+            "Plugin-Link" to "https://github.com/nj-yzf/josm-BetterIME",
             "Author" to "nj-yzf",
             "Created-By" to "${System.getProperty("java.version")} (${System.getProperty("java.vendor")})"
         )
