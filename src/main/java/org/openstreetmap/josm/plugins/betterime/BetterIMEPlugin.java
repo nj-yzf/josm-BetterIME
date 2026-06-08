@@ -154,7 +154,10 @@ public class BetterIMEPlugin extends Plugin {
             Component comp = (Component) evt.getNewValue();
             if (comp == null) { wasChinese = false; return; }
 
-            if (!isTextInput(comp)) {
+            if (isTagKeyInput(comp)) {
+                wasChinese = false;
+                setComposition(comp, false);
+            } else if (!isTextInput(comp)) {
                 wasChinese = false;
                 setComposition(comp, false);
             } else if (shouldEnableChinese(comp)) {
@@ -199,15 +202,37 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         // ==================================================================
-        // Tag key detection (three JOSM contexts)
+        // Tag key detection (JOSM contexts)
         // ==================================================================
 
         private static String detectTagKey(Component comp) {
-            String key = detectTagKeyFromEditDialog(comp);
+            String key = detectTagKeyFromTagsDialogControls(comp);
+            if (key != null) return key;
+            key = detectTagKeyFromEditDialog(comp);
             if (key != null) return key;
             key = detectTagKeyFromTagTable(comp);
             if (key != null) return key;
             return detectTagKeyFromPresetDialog(comp);
+        }
+
+        /** Context A: Properties panel Add/Edit dialogs, using the current key field text. */
+        private static String detectTagKeyFromTagsDialogControls(Component comp) {
+            try {
+                Window window = SwingUtilities.getWindowAncestor(comp);
+                if (window == null || !window.getClass().getName().contains("TagEditHelper")) return null;
+
+                Object values = getTagsDialogField(window, "values");
+                if (!isComboOrEditor(values, comp)) return null;
+
+                Object keys = getTagsDialogField(window, "keys");
+                Object text = invokeNoArg(keys, "getText");
+                if (text instanceof String && !((String) text).trim().isEmpty()) {
+                    return ((String) text).trim();
+                }
+            } catch (Exception e) {
+                Logging.trace(e);
+            }
+            return null;
         }
 
         /** Context A: EditTagDialog popup (Properties panel double-click/Edit button). */
@@ -294,11 +319,73 @@ public class BetterIMEPlugin extends Plugin {
         }
 
         // ==================================================================
+        // Tag key input detection
+        // ==================================================================
+
+        private static boolean isTagKeyInput(Component comp) {
+            return isTagKeyInputFromTagsDialog(comp) || isTagKeyInputFromTagTable(comp);
+        }
+
+        /** JOSM properties panel Add/Edit dialogs expose separate "keys" and "values" fields. */
+        private static boolean isTagKeyInputFromTagsDialog(Component comp) {
+            try {
+                Window window = SwingUtilities.getWindowAncestor(comp);
+                if (window == null || !window.getClass().getName().contains("TagEditHelper")) return false;
+
+                return isComboOrEditor(getTagsDialogField(window, "keys"), comp);
+            } catch (Exception e) {
+                Logging.trace(e);
+            }
+            return false;
+        }
+
+        /** TagTable-style inline editors use column 0 for keys and column 1 for values. */
+        private static boolean isTagKeyInputFromTagTable(Component comp) {
+            try {
+                Container parent = comp.getParent();
+                while (parent != null) {
+                    if (parent instanceof JTable) {
+                        JTable table = (JTable) parent;
+                        String cn = table.getClass().getName();
+                        if (!cn.contains("TagTable") && !cn.contains("tagging")) return false;
+                        return table.getEditingColumn() == 0;
+                    }
+                    parent = parent.getParent();
+                }
+            } catch (Exception e) {
+                Logging.trace(e);
+            }
+            return false;
+        }
+
+        // ==================================================================
         // Utilities
         // ==================================================================
 
+        private static Object getTagsDialogField(Window window, String fieldName) {
+            for (Class<?> c = window.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                Object value = getCachedObjectField(window, c, fieldName);
+                if (value != null) return value;
+            }
+            return null;
+        }
+
+        private static boolean isComboOrEditor(Object combo, Component comp) {
+            if (combo instanceof Component && isComponentOrAncestor((Component) combo, comp)) {
+                return true;
+            }
+            Object editor = invokeNoArg(combo, "getEditorComponent");
+            return editor instanceof Component && isComponentOrAncestor((Component) editor, comp);
+        }
+
         /** Reads a String field via reflection, with caching. */
         private static String getCachedField(Object obj, Class<?> clazz, String fieldName) {
+            Object v = getCachedObjectField(obj, clazz, fieldName);
+            return v instanceof String ? (String) v : null;
+        }
+
+        /** Reads an object field via reflection, with caching. */
+        private static Object getCachedObjectField(Object obj, Class<?> clazz, String fieldName) {
             String cacheKey = clazz.getName() + "#" + fieldName;
             try {
                 Field f = FIELD_CACHE.computeIfAbsent(cacheKey, k -> {
@@ -311,11 +398,27 @@ public class BetterIMEPlugin extends Plugin {
                     }
                 });
                 if (f == null) return null;
-                Object v = f.get(obj);
-                return v instanceof String ? (String) v : null;
+                return f.get(obj);
             } catch (Exception e) {
                 return null;
             }
+        }
+
+        private static Object invokeNoArg(Object obj, String methodName) {
+            if (obj == null) return null;
+            try {
+                Method method = obj.getClass().getMethod(methodName);
+                return method.invoke(obj);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        private static boolean isComponentOrAncestor(Component ancestor, Component comp) {
+            for (Component c = comp; c != null; c = c.getParent()) {
+                if (c == ancestor) return true;
+            }
+            return false;
         }
 
         private static boolean isTextInput(Component comp) {
